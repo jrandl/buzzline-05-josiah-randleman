@@ -1,4 +1,4 @@
-""" db_sqlite_case.py 
+""" db_sqlite_josiah_randleman.py 
 
 Has the following functions:
 - init_db(config): Initialize the SQLite database and create the 'streamed_messages' table if it doesn't exist.
@@ -70,6 +70,34 @@ def init_db(db_path: pathlib.Path):
                 )
             """
             )
+
+            # Table to store each message
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS sentiment_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                category TEXT,
+                author TEXT,
+                sentiment REAL,
+                timestamp TEXT
+            )
+            """)
+
+            # Table to store aggregated category sentiment
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS category_sentiment (
+                category TEXT PRIMARY KEY,
+                avg_sentiment REAL
+            )
+            """)
+
+            # Table to store sentiment trends for authors
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS author_sentiment (
+                author TEXT PRIMARY KEY,
+                avg_sentiment REAL
+            )
+            """)
+
             conn.commit()
         logger.info(f"SUCCESS: Database initialized and table ready at {db_path}.")
     except Exception as e:
@@ -93,30 +121,55 @@ def insert_message(message: dict, db_path: pathlib.Path) -> None:
     logger.info(f"{message=}")
     logger.info(f"{db_path=}")
 
-    STR_PATH = str(db_path)
     try:
-        with sqlite3.connect(STR_PATH) as conn:
+        # Extract fields safely from the message dictionary
+        category = message.get("category", "unknown")
+        author = message.get("author", "anonymous")
+        sentiment = float(message.get("sentiment", 0.0))
+        timestamp = message.get("timestamp", "unknown")
+        message_text = message.get("message", "")
+        keyword_mentioned = message.get("keyword_mentioned", "")
+        message_length = int(message.get("message_length", 0))
+
+        with sqlite3.connect(db_path) as conn:
             cursor = conn.cursor()
-            cursor.execute(
-                """
-                INSERT INTO streamed_messages (
-                    message, author, timestamp, category, sentiment, keyword_mentioned, message_length
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-                (
-                    message["message"],
-                    message["author"],
-                    message["timestamp"],
-                    message["category"],
-                    message["sentiment"],
-                    message["keyword_mentioned"],
-                    message["message_length"],
-                ),
-            )
+
+            # Insert the raw message into streamed_messages table
+            cursor.execute("""
+                INSERT INTO streamed_messages (message, author, timestamp, category, sentiment, keyword_mentioned, message_length)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (message_text, author, timestamp, category, sentiment, keyword_mentioned, message_length))
+
+            # Insert sentiment analysis data into sentiment_messages
+            cursor.execute("""
+                INSERT INTO sentiment_messages (category, author, sentiment, timestamp)
+                VALUES (?, ?, ?, ?)
+            """, (category, author, sentiment, timestamp))
+
+            # Update category sentiment (calculate average)
+            cursor.execute("""
+                INSERT INTO category_sentiment (category, avg_sentiment)
+                VALUES (?, ?)
+                ON CONFLICT(category) DO UPDATE SET avg_sentiment = (
+                    SELECT AVG(sentiment) FROM sentiment_messages WHERE category = ?
+                )
+            """, (category, sentiment, category))
+
+            # Update author sentiment (calculate average)
+            cursor.execute("""
+                INSERT INTO author_sentiment (author, avg_sentiment)
+                VALUES (?, ?)
+                ON CONFLICT(author) DO UPDATE SET avg_sentiment = (
+                    SELECT AVG(sentiment) FROM sentiment_messages WHERE author = ?
+                )
+            """, (author, sentiment, author))
+
             conn.commit()
-        logger.info("Inserted one message into the database.")
+            logger.info("Inserted one message into the database.")
+
     except Exception as e:
         logger.error(f"ERROR: Failed to insert message into the database: {e}")
+
 
 
 #####################################
